@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Hand Heart Beat Sound</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  body {
+    margin: 0;
+    overflow: hidden;
+    background: black;
+  }
+  video {
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<video id="video" autoplay playsinline></video>
+
+<!-- THREE.JS -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
+
+<!-- MEDIAPIPE -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<script>
+/* ---------------- THREE SETUP ---------------- */
+const scene = new THREE.Scene();
+
+const camera = new THREE.PerspectiveCamera(
+  75,
+  window.innerWidth / window.innerHeight,
+  0.1,
+  100
+);
+camera.position.z = 15;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+/* ---------------- HEART SHAPE ---------------- */
+function heartPoints() {
+  const pts = [];
+  for (let t = 0; t < Math.PI * 2; t += 0.08) {
+    const x = 16 * Math.pow(Math.sin(t), 3);
+    const y =
+      13 * Math.cos(t) -
+      5 * Math.cos(2 * t) -
+      2 * Math.cos(3 * t) -
+      Math.cos(4 * t);
+    pts.push(new THREE.Vector3(x / 7, y / 7, 0));
+  }
+  return pts;
+}
+
+const geometry = new THREE.BufferGeometry().setFromPoints(heartPoints());
+const material = new THREE.PointsMaterial({
+  color: 0xff3366,
+  size: 0.18
+});
+const heart = new THREE.Points(geometry, material);
+scene.add(heart);
+
+/* ---------------- HAND STATE ---------------- */
+let handDetected = false;
+let palmX = 0;
+let palmY = 0;
+let palmOpen = false;
+
+let baseScale = 1;
+let beatSpeed = 0.05;
+let beatTime = 0;
+
+/* ---------------- HEARTBEAT SOUND ---------------- */
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+let lastBeat = 0;
+
+function playHeartbeat(volume = 0.3, pitch = 1) {
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+
+  osc.type = "sine";
+  osc.frequency.value = 80 * pitch;
+
+  gain.gain.setValueAtTime(volume, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(
+    0.001,
+    audioCtx.currentTime + 0.15
+  );
+
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+
+  osc.start();
+  osc.stop(audioCtx.currentTime + 0.15);
+}
+
+/* ---------------- MEDIAPIPE ---------------- */
+const hands = new Hands({
+  locateFile: f =>
+    `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+});
+
+hands.setOptions({
+  maxNumHands: 1,
+  modelComplexity: 1,
+  minDetectionConfidence: 0.7,
+  minTrackingConfidence: 0.7
+});
+
+hands.onResults(res => {
+  if (res.multiHandLandmarks && res.multiHandLandmarks.length) {
+    handDetected = true;
+    const lm = res.multiHandLandmarks[0];
+
+    palmX = (lm[9].x - 0.5) * 20;
+    palmY = (0.5 - lm[9].y) * 20;
+
+    const d = Math.hypot(
+      lm[4].x - lm[8].x,
+      lm[4].y - lm[8].y
+    );
+
+    palmOpen = d > 0.05;
+
+    if (palmOpen) {
+      baseScale = 1.6;
+      beatSpeed = 0.04;
+    } else {
+      baseScale = 0.8;
+      beatSpeed = 0.09;
+    }
+  } else {
+    handDetected = false;
+  }
+});
+
+/* ---------------- CAMERA ---------------- */
+const video = document.getElementById("video");
+const cam = new Camera(video, {
+  onFrame: async () => {
+    if (audioCtx.state === "suspended") {
+      audioCtx.resume(); // required by browser
+    }
+    await hands.send({ image: video });
+  },
+  width: 640,
+  height: 480
+});
+cam.start();
+
+/* ---------------- ANIMATION ---------------- */
+function animate(time) {
+  requestAnimationFrame(animate);
+
+  if (handDetected) {
+    heart.position.x += (palmX - heart.position.x) * 0.25;
+    heart.position.y += (palmY - heart.position.y) * 0.25;
+
+    beatTime += beatSpeed;
+    const beat = Math.sin(beatTime) * 0.15;
+    const scale = baseScale + beat;
+    heart.scale.set(scale, scale, scale);
+
+    // heartbeat sound timing
+    if (time - lastBeat > (palmOpen ? 800 : 400)) {
+      playHeartbeat(
+        palmOpen ? 0.4 : 0.25,
+        palmOpen ? 0.9 : 1.2
+      );
+      lastBeat = time;
+    }
+  }
+
+  renderer.render(scene, camera);
+}
+animate();
+
+/* ---------------- RESIZE ---------------- */
+window.addEventListener("resize", () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+
+</body>
+</html>
